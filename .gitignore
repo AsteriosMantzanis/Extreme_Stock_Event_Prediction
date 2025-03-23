@@ -1,4 +1,14 @@
-*__pycache__
-*.ipynb
-*.log
-*.venv
+# Ignore compiled Python bytecode files  
+*__pycache__  
+
+# Ignore Jupyter Notebook checkpoint files  
+*.ipynb  
+
+# Ignore log files  
+*.log  
+
+# Ignore virtual environment directories  
+*.venv  
+
+# Ignore mypy type-checking cache  
+*.mypy_cache  
