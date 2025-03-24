@@ -12,7 +12,7 @@ from loguru import logger as logging
 from pydantic import BaseModel
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score
-from sklearn.model_selection import StratifiedShuffleSplit, cross_val_score
+from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from data_processing import StockData
@@ -65,11 +65,11 @@ class RandomForestModel:
 
         return X_train_scaled, X_test_scaled, scaler
 
-    def evaluate_model(
+    def tune_model(
         self, model: RandomForestClassifier, X_train: np.ndarray, y_train: np.ndarray
     ) -> float:
         """
-        Evaluate the model using StratifiedShuffleSplit and return the F1 score.
+        Tune the model using StratifiedShuffleSplit and return the F1 score.
         """
         sss = StratifiedShuffleSplit(
             n_splits=self.config.hyperparameters["cv"],
@@ -150,7 +150,7 @@ class RandomForestModel:
         )
 
         # Evaluate model
-        score = self.evaluate_model(model, self.X_test_scaled, self.y_test)
+        score = self.tune_model(model, self.X_test_scaled, self.y_test)
         return score
 
     def log_and_save_model(self, model: RandomForestClassifier):
@@ -165,7 +165,7 @@ class RandomForestModel:
             logging.info(f"Best parameters: {model.get_params()}")
             mlflow.log_params(model.get_params())
             mlflow.log_metric(
-                "f1_score", self.evaluate_model(model, self.X_test_scaled, self.y_test)
+                "f1_score", self.tune_model(model, self.X_test_scaled, self.y_test)
             )
             mlflow.sklearn.log_model(
                 sk_model=model, artifact_path="random_forest_model"
@@ -194,26 +194,23 @@ def run():
     stock_data = StockData(
         ticker="AAPL", start_date="2015-01-01", end_date="2024-01-01"
     )
-    train, val, test = stock_data.partition_data()
-    # train = pd.concat([train, val])  # use train and val cause there are not a lot of data
+    train, val, _ = stock_data.partition_data()
 
     # Initialize and train model with window sizes for lookback and horizon
     lookback = 10
-    horizon = 5
+    horizon = 1
     # get windows
     X_train, y_train = stock_data.get_windows(train, lookback, horizon, "Extreme_Event")
-    X_test, y_test = stock_data.get_windows(val, lookback, horizon, "Extreme_Event")
+    X_val, y_val = stock_data.get_windows(val, lookback, horizon, "Extreme_Event")
     # reshape to rows,lookback*features
     X_train = X_train.reshape(X_train.shape[0], -1)
-    X_test = X_test.reshape(X_test.shape[0], -1)
+    X_val = X_val.reshape(X_val.shape[0], -1)
     # turn to 1d array
-    y_train, y_test = y_train.ravel(), y_test.ravel()
+    y_train, y_val = y_train.ravel(), y_val.ravel()
 
-    rf_model = RandomForestModel(X_train, y_train, X_test, y_test, config)
+    rf_model = RandomForestModel(X_train, y_train, X_val, y_val, config)
 
-    best_model = rf_model.optimize_hyperparameters(
-        trials=config.hyperparameters["trials"]
-    )
+    rf_model.optimize_hyperparameters(trials=config.hyperparameters["trials"])
 
 
 if __name__ == "__main__":

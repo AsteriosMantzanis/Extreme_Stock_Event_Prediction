@@ -3,7 +3,7 @@ model:
   experiment_id: '1'
 
 hyperparameters:
-  trials: 50
+  trials: 10
   cv: 10
   random_state: 42
   num_estimators_range: [200, 500]
