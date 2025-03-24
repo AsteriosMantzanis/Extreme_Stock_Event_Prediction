@@ -25,29 +25,23 @@ class Config(BaseModel):
 
 
 class RandomForestModel:
-    def __init__(
-        self,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
-        X_test: np.ndarray,
-        y_test: np.ndarray,
-        config: Config,
-    ):
+    def __init__(self, X_train: np.ndarray, y_train: np.ndarray, config_path: str):
+        # Load config from YAML file
+        with open(config_path) as file:
+            config_data = yaml.safe_load(file)
+        self.config = Config(**config_data)
+
         self.X_train = X_train
         self.y_train = y_train
-        self.X_test = X_test
-        self.y_test = y_test
-        self.config = config
 
         # Perform scaling in the constructor for global access
-        self.X_train_scaled, self.X_test_scaled, self.scaler = self._scale_data(
-            X_train, X_test, self.config.hyperparameters["scaler"][0]
+        self.X_train_scaled, self.scaler = self._scale_data(
+            X_train, self.config.hyperparameters["scaler"][0]
         )
 
     def _scale_data(
         self,
         X_train: np.ndarray,
-        X_test: np.ndarray,
         scaler_name: str,
     ) -> np.ndarray:
         """
@@ -61,9 +55,8 @@ class RandomForestModel:
 
         # Fit and transform on training data
         X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
 
-        return X_train_scaled, X_test_scaled, scaler
+        return X_train_scaled, scaler
 
     def tune_model(
         self, model: RandomForestClassifier, X_train: np.ndarray, y_train: np.ndarray
@@ -89,10 +82,12 @@ class RandomForestModel:
 
         return np.mean(scores)
 
-    def optimize_hyperparameters(self, trials: int) -> RandomForestClassifier:
+    def optimize_hyperparameters(self) -> RandomForestClassifier:
         """
         Hyperparameter optimization using Optuna.
         """
+
+        trials = self.config.hyperparameters["trials"]
 
         def objective(trial):
             return self.objective_fn(trial)
@@ -150,7 +145,7 @@ class RandomForestModel:
         )
 
         # Evaluate model
-        score = self.tune_model(model, self.X_test_scaled, self.y_test)
+        score = self.tune_model(model, self.X_train_scaled, self.y_train)
         return score
 
     def log_and_save_model(self, model: RandomForestClassifier):
@@ -165,7 +160,7 @@ class RandomForestModel:
             logging.info(f"Best parameters: {model.get_params()}")
             mlflow.log_params(model.get_params())
             mlflow.log_metric(
-                "f1_score", self.tune_model(model, self.X_test_scaled, self.y_test)
+                "f1_score", self.tune_model(model, self.X_train_scaled, self.y_train)
             )
             mlflow.sklearn.log_model(
                 sk_model=model, artifact_path="random_forest_model"
@@ -185,32 +180,31 @@ class RandomForestModel:
 
 
 def run():
-    # Load config from YAML file
-    with open("data/rf_config.yaml") as file:
-        config_data = yaml.safe_load(file)
-    config = Config(**config_data)
-
     # Load and partition data
     stock_data = StockData(
         ticker="AAPL", start_date="2015-01-01", end_date="2024-01-01"
     )
     train, val, _ = stock_data.partition_data()
+    train = pd.concat([train, val])
 
     # Initialize and train model with window sizes for lookback and horizon
     lookback = 10
     horizon = 1
+
     # get windows
     X_train, y_train = stock_data.get_windows(train, lookback, horizon, "Extreme_Event")
-    X_val, y_val = stock_data.get_windows(val, lookback, horizon, "Extreme_Event")
+
     # reshape to rows,lookback*features
     X_train = X_train.reshape(X_train.shape[0], -1)
-    X_val = X_val.reshape(X_val.shape[0], -1)
+
     # turn to 1d array
-    y_train, y_val = y_train.ravel(), y_val.ravel()
+    y_train = y_train.ravel()
 
-    rf_model = RandomForestModel(X_train, y_train, X_val, y_val, config)
+    # instantiate rf
+    rf_model = RandomForestModel(X_train, y_train, "data/rf_config.yaml")
 
-    rf_model.optimize_hyperparameters(trials=config.hyperparameters["trials"])
+    # tune hyperparams and get best model
+    rf_model.optimize_hyperparameters()
 
 
 if __name__ == "__main__":
