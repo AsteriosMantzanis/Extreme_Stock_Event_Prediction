@@ -144,6 +144,11 @@ class StockData(BaseModel):
             df.shape[0] - lookback - horizon + 1
         ):  # here by including a step we could have overlapping windows
             window_data = df[i : i + lookback + horizon]
+
+            # check and skip NaN values
+            if window_data.dropna().shape[0] != window_data.shape[0]:
+                continue
+
             X.append(window_data[features].iloc[:lookback].to_numpy())
             y.append(window_data[target].iloc[lookback : lookback + 1].to_numpy())
 
