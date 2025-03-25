@@ -11,4 +11,4 @@ hyperparameters:
   min_samples_split_range: [10, 20]
   min_samples_leaf_range: [5, 20]
   class_weight: ["balanced", "balanced_subsample"]  # for handling imbalanced classes
-  scaler: ["standard"]  # scalers to normalize/standardize features
+  scaler: "standard"  # scalers to normalize/standardize features

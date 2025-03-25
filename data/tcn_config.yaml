@@ -1,0 +1,18 @@
+model:
+  name: "TemporalCNN"
+  experiment_id: "1"
+
+hyperparameters:
+  optimizer: "adam"
+  learning_rate_range: [0.0001, 0.01]
+  batch_size: 32
+  epochs: 50
+  dropout_range: [0.2, 0.5]
+  conv1_out_channels_range: [16, 64]
+  kernel_size_range: [3, 5]
+  stride_range: [1, 2]
+  pooling_kernel_size: 2
+  hidden_units_range: [50, 200]
+  scaler: 'standard'
+  trials: 50
+  random_seed: 42

@@ -188,7 +188,9 @@ def run():
         ticker="AAPL", start_date="2015-01-01", end_date="2024-01-01"
     )
     train, val, _ = stock_data.partition_data()
-    train = pd.concat([train, val])
+    train = pd.concat(
+        [train, val]
+    )  # use train and val for tuning because of low data volume
 
     # Initialize and train model with window sizes for lookback and horizon
     lookback = 10
