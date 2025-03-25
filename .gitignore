@@ -14,7 +14,7 @@
 *.mypy_cache
 
 # Ignore .pkl and .pth files in the data folder
-/data/*.pkl
-/data/*.pth
+/data/**/*.pkl
+/data/**/*.pth
 
 *mlruns
