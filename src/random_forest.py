@@ -36,7 +36,7 @@ class RandomForestModel:
 
         # Perform scaling in the constructor for global access
         self.X_train_scaled, self.scaler = self._scale_data(
-            X_train, self.config.hyperparameters["scaler"][0]
+            X_train, self.config.hyperparameters["scaler"]
         )
 
     def _scale_data(

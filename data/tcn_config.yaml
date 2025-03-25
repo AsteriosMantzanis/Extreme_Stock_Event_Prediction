@@ -4,15 +4,12 @@ model:
 
 hyperparameters:
   optimizer: "adam"
-  learning_rate_range: [0.0001, 0.01]
+  learning_rate_range: [0.00001, 0.001]
   batch_size: 32
   epochs: 50
-  dropout_range: [0.2, 0.5]
-  conv1_out_channels_range: [16, 64]
+  dropout_range: [0.1, 0.7]
+  conv1_out_channels_range: [2,128]
   kernel_size_range: [3, 5]
-  stride_range: [1, 2]
-  pooling_kernel_size: 2
-  hidden_units_range: [50, 200]
   scaler: 'standard'
   trials: 50
-  random_seed: 42
+  random_seed: 0

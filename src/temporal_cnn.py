@@ -11,7 +11,7 @@ import torch.optim as optim
 import yaml
 from loguru import logger as logging
 from pydantic import BaseModel
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -25,21 +25,24 @@ class Config(BaseModel):
 
 class TemporalCNN(nn.Module):
     def __init__(
-        self, input_channels, lookback, out_channels, kernel_size, num_classes=2
+        self,
+        input_channels,
+        lookback,
+        out_channels,
+        kernel_size,
+        dropout,
+        num_classes=2,
     ):
         super().__init__()
         self.conv1 = nn.Conv1d(input_channels, out_channels, kernel_size)
         self.conv2 = nn.Conv1d(out_channels, out_channels * 2, kernel_size)
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(dropout)
         self.flatten = nn.Flatten()
         new_length = lookback - 2 * (
             kernel_size - 1
         )  # Corrected length after convolution
-        self.fc = nn.Linear(
-            new_length * out_channels * 2, num_classes
-        )  # Adjusted input size
-        self.softmax = nn.Softmax(dim=1)
+        self.fc = nn.Linear(new_length * out_channels * 2, num_classes)
 
     def forward(self, x):
         x = self.relu(self.conv1(x))
@@ -47,8 +50,7 @@ class TemporalCNN(nn.Module):
         x = self.relu(self.conv2(x))
         x = self.dropout(x)
         x = self.flatten(x)
-        x = self.fc(x)
-        return self.softmax(x)
+        return self.fc(x)
 
 
 class TCNNTrainer:
@@ -63,6 +65,12 @@ class TCNNTrainer:
         X_train_scaled, X_val_scaled, self.scaler = self._scale_data(
             X_train, X_val, self.config.hyperparameters["scaler"]
         )
+
+        # Balance class weights
+        class_counts = np.bincount(y_train.ravel())
+        self.class_weights = torch.tensor(
+            len(y_train) / (len(class_counts) * class_counts), dtype=torch.float32
+        ).to(self.device)
 
         self.num_features = X_train.shape[2]  # Set input_channels dynamically
 
@@ -87,7 +95,7 @@ class TCNNTrainer:
         self.train_dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.config.hyperparameters["batch_size"],
-            shuffle=True,
+            shuffle=False,
         )
         self.val_dataloader = DataLoader(
             self.val_dataset,
@@ -129,66 +137,79 @@ class TCNNTrainer:
 
         return X_train_scaled, X_val_scaled, scaler
 
-    def train_model(self, model, optimizer, criterion):
-        model.train()
+    def train_and_evaluate(self, model, optimizer, criterion, scheduler):
+        best_roc, patience, counter = 0, 10, 0  # Early stopping params
+
         for epoch in range(self.config.hyperparameters["epochs"]):
-            total_loss = 0
+            model.train()
             for X_batch, y_batch in self.train_dataloader:
                 optimizer.zero_grad()
                 outputs = model(X_batch)
                 loss = criterion(outputs, y_batch)
                 loss.backward()
                 optimizer.step()
-                total_loss += loss.item()
-            avg_loss = total_loss / len(self.train_dataloader)
-            mlflow.log_metric("train_loss", avg_loss, step=epoch)
-            logging.info(f"Epoch {epoch+1}, Loss: {avg_loss:.4f}")
-        return model
+
+            # Validation
+            model.eval()
+            all_preds, all_labels = [], []
+            with torch.no_grad():
+                for X_batch, y_batch in self.val_dataloader:
+                    outputs = model(X_batch)
+                    _, preds = torch.max(outputs, 1)
+                    all_preds.extend(preds.cpu().numpy())
+                    all_labels.extend(y_batch.cpu().numpy())
+
+            roc = f1_score(all_labels, all_preds, average="weighted")
+            mlflow.log_metric("validation_roc_auc_score", roc, step=epoch)
+            logging.info(f"Epoch {epoch+1}, Validation roc_auc_score: {roc:.4f}")
+
+            scheduler.step()
+
+            # Early stopping
+            if roc > best_roc:
+                best_roc = roc
+                counter = 0
+                best_model_state = model.state_dict()
+            else:
+                counter += 1
+                if counter >= patience:
+                    logging.info("Early stopping triggered.")
+                    break
+
+        model.load_state_dict(best_model_state)
+        return best_roc, model
 
     def objective(self, trial):
-        learning_rate = trial.suggest_float(
-            "learning_rate", *self.config.hyperparameters["learning_rate_range"]
-        )
-        dropout_rate = trial.suggest_float(
-            "dropout", *self.config.hyperparameters["dropout_range"]
-        )
-        conv1_out_channels = trial.suggest_int(
-            "conv1_out_channels",
-            *self.config.hyperparameters["conv1_out_channels_range"],
-        )
-        kernel_size = trial.suggest_int(
-            "kernel_size", *self.config.hyperparameters["kernel_size_range"]
-        )
+        params = {
+            "learning_rate": trial.suggest_float(
+                "learning_rate", *self.config.hyperparameters["learning_rate_range"]
+            ),
+            "dropout": trial.suggest_float(
+                "dropout", *self.config.hyperparameters["dropout_range"]
+            ),
+            "conv1_out_channels": trial.suggest_int(
+                "conv1_out_channels",
+                *self.config.hyperparameters["conv1_out_channels_range"],
+            ),
+            "kernel_size": trial.suggest_int(
+                "kernel_size", *self.config.hyperparameters["kernel_size_range"]
+            ),
+        }
 
         model = TemporalCNN(
-            input_channels=self.num_features,
-            lookback=10,
-            out_channels=conv1_out_channels,
-            kernel_size=kernel_size,
+            self.num_features,
+            10,
+            params["conv1_out_channels"],
+            params["kernel_size"],
+            params["dropout"],
         ).to(self.device)
-        model.dropout.p = dropout_rate
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=0.5 * self.config.hyperparameters["epochs"]
+        )
+        criterion = nn.CrossEntropyLoss(weight=self.class_weights)
 
-        model = self.train_model(model, optimizer, criterion)
-
-        return self.evaluate_model(model)
-
-    def evaluate_model(self, model):
-        model.eval()
-        all_preds = []
-        all_labels = []
-
-        with torch.no_grad():
-            for X_batch, y_batch in self.val_dataloader:
-                outputs = model(X_batch)
-                _, preds = torch.max(outputs, 1)
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(y_batch.cpu().numpy())
-
-        f1 = f1_score(all_labels, all_preds, average="weighted")
-        mlflow.log_metric("validation_f1", f1)
-        return f1
+        return self.train_and_evaluate(model, optimizer, criterion, scheduler)[0]
 
     def optimize_hyperparameters(self):
         study = optuna.create_study(
@@ -207,12 +228,17 @@ class TCNNTrainer:
             lookback=10,
             out_channels=best_params["conv1_out_channels"],
             kernel_size=best_params["kernel_size"],
+            dropout=best_params["dropout"],
         ).to(self.device)
-        best_model.dropout.p = best_params["dropout"]
         optimizer = optim.Adam(best_model.parameters(), lr=best_params["learning_rate"])
-        criterion = nn.CrossEntropyLoss()
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=0.5 * self.config.hyperparameters["epochs"]
+        )
+        criterion = nn.CrossEntropyLoss(weight=self.class_weights)
 
-        best_model = self.train_model(best_model, optimizer, criterion)
+        _, best_model = self.train_and_evaluate(
+            best_model, optimizer, criterion, scheduler
+        )
 
         model_path = os.path.join("data", "best_tcnn.pth")
         torch.save(best_model.state_dict(), model_path)
@@ -234,7 +260,7 @@ def run():
         )
         train, val, _ = stock_data.partition_data()
 
-        # Initialize and train model with window sizes for lookback and horizon
+        # Initialize lookback and horizon
         lookback = 10
         horizon = 1
 
