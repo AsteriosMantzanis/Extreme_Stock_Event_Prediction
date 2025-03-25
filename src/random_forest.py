@@ -154,6 +154,9 @@ class RandomForestModel:
         """
         # Start an MLflow run and log the model and metrics
         with mlflow.start_run():
+            mlflow.set_experiment(
+                f"Extreme Stock Event Prediction {self.config.model['experiment_id']}"
+            )
             mlflow.set_tag("model_name", self.config.model["name"])
             mlflow.set_tag("experiment_id", self.config.model["experiment_id"])
 

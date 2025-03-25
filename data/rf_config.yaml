@@ -1,15 +1,14 @@
 model:
   name: "random_forest_stock"
-  experiment_id: '1'
+  experiment_id: '2'
 
 hyperparameters:
   trials: 10
   cv: 10
   random_state: 42
-  num_estimators_range: [200, 500]
-  max_depth_range: [2, 50]
+  num_estimators_range: [200, 400]
+  max_depth_range: [2, 10]
   min_samples_split_range: [10, 20]
   min_samples_leaf_range: [5, 20]
   class_weight: ["balanced", "balanced_subsample"]  # for handling imbalanced classes
-  scoring: ["f1"]  # scoring metrics for cross-validation
   scaler: ["standard"]  # scalers to normalize/standardize features
