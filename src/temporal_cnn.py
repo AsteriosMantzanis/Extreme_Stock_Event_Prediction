@@ -15,7 +15,7 @@ from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-from data_processing import StockData
+from src.data_processing import StockData
 
 
 class Config(BaseModel):
@@ -159,7 +159,7 @@ class TCNNTrainer:
                     all_preds.extend(preds.cpu().numpy())
                     all_labels.extend(y_batch.cpu().numpy())
 
-            roc = f1_score(all_labels, all_preds, average="weighted")
+            roc = roc_auc_score(all_labels, all_preds)
             mlflow.log_metric("validation_roc_auc_score", roc, step=epoch)
             logging.info(f"Epoch {epoch+1}, Validation roc_auc_score: {roc:.4f}")
 
@@ -248,6 +248,11 @@ class TCNNTrainer:
         with open(scaler_path, "wb") as f:
             pickle.dump(self.scaler, f)
         mlflow.log_artifact(scaler_path)
+
+        params_path = os.path.join("data", "best_params.pkl")
+        with open(params_path, "wb") as f:
+            pickle.dump(best_params, f)
+        mlflow.log_artifact(params_path)
 
         return best_model
 

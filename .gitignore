@@ -13,4 +13,9 @@
 # Ignore mypy type-checking cache
 *.mypy_cache
 
+# Ignore .pkl and .pth files in the data folder
+/data/*.pkl
+/data/*.pth
+
+
 *mlruns
