@@ -17,5 +17,4 @@
 /data/*.pkl
 /data/*.pth
 
-
 *mlruns
