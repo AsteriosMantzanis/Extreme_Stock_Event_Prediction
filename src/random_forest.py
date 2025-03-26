@@ -31,6 +31,8 @@ class RandomForestModel:
             config_data = yaml.safe_load(file)
         self.config = Config(**config_data)
 
+        self.set_seed(self.config.hyperparameters["random_seed"])
+
         self.X_train = X_train
         self.y_train = y_train
 
@@ -38,6 +40,9 @@ class RandomForestModel:
         self.X_train_scaled, self.scaler = self._scale_data(
             X_train, self.config.hyperparameters["scaler"]
         )
+
+    def set_seed(self, seed: int):
+        np.random.seed(seed)
 
     def _scale_data(
         self,
@@ -93,7 +98,12 @@ class RandomForestModel:
             return self.objective_fn(trial)
 
         # Optuna study setup
-        study = optuna.create_study(direction="maximize")
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(
+                seed=self.config.hyperparameters["random_seed"]
+            ),
+        )
         study.optimize(objective, n_trials=trials)
 
         # Train the best model on the full training data

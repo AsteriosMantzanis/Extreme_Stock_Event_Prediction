@@ -69,7 +69,8 @@ class TCNNTrainer:
         # Balance class weights
         class_counts = np.bincount(y_train.ravel())
         self.class_weights = torch.tensor(
-            len(y_train) / (len(class_counts) * class_counts), dtype=torch.float32
+            len(y_train) / (len(class_counts) * np.maximum(class_counts, 1)),
+            dtype=torch.float32,
         ).to(self.device)
 
         self.num_features = X_train.shape[2]  # Set input_channels dynamically
@@ -169,12 +170,13 @@ class TCNNTrainer:
             if roc > best_roc:
                 best_roc = roc
                 counter = 0
-                best_model_state = model.state_dict()
             else:
                 counter += 1
                 if counter >= patience:
                     logging.info("Early stopping triggered.")
                     break
+
+        best_model_state = model.state_dict()
 
         model.load_state_dict(best_model_state)
         return best_roc, model
