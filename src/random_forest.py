@@ -31,7 +31,7 @@ class RandomForestModel:
             config_data = yaml.safe_load(file)
         self.config = Config(**config_data)
 
-        self.set_seed(self.config.hyperparameters["random_seed"])
+        self.set_seed(self.config.hyperparameters["random_state"])
 
         self.X_train = X_train
         self.y_train = y_train
@@ -57,6 +57,8 @@ class RandomForestModel:
             scaler = StandardScaler()
         elif scaler_name == "minmax":
             scaler = MinMaxScaler()
+        else:
+            raise ValueError("Scaler must be 'standard' or 'minmax'.")
 
         # Fit and transform on training data
         X_train_scaled = scaler.fit_transform(X_train)
@@ -91,23 +93,20 @@ class RandomForestModel:
         """
         Hyperparameter optimization using Optuna.
         """
-
-        trials = self.config.hyperparameters["trials"]
-
-        def objective(trial):
-            return self.objective_fn(trial)
-
         # Optuna study setup
         study = optuna.create_study(
             direction="maximize",
             sampler=optuna.samplers.TPESampler(
-                seed=self.config.hyperparameters["random_seed"]
+                seed=self.config.hyperparameters["random_state"]
             ),
         )
-        study.optimize(objective, n_trials=trials)
+        study.optimize(self.objective, n_trials=self.config.hyperparameters["trials"])
 
         # Train the best model on the full training data
-        best_model = RandomForestClassifier(**study.best_params)
+        best_model = RandomForestClassifier(
+            **study.best_params,
+            random_state=self.config.hyperparameters["random_state"],
+        )
         best_model.fit(self.X_train_scaled, self.y_train)
 
         # Log and save model
@@ -115,30 +114,22 @@ class RandomForestModel:
 
         return best_model
 
-    def objective_fn(self, trial):
+    def objective(self, trial):
         """
         Objective function to be used in Optuna optimization.
         """
         # Define the hyperparameters to be optimized
         n_estimators = trial.suggest_int(
-            "n_estimators",
-            self.config.hyperparameters["num_estimators_range"][0],
-            self.config.hyperparameters["num_estimators_range"][1],
+            "n_estimators", *self.config.hyperparameters["num_estimators_range"]
         )
         max_depth = trial.suggest_int(
-            "max_depth",
-            self.config.hyperparameters["max_depth_range"][0],
-            self.config.hyperparameters["max_depth_range"][1],
+            "max_depth", *self.config.hyperparameters["max_depth_range"]
         )
         min_samples_split = trial.suggest_int(
-            "min_samples_split",
-            self.config.hyperparameters["min_samples_split_range"][0],
-            self.config.hyperparameters["min_samples_split_range"][1],
+            "min_samples_split", *self.config.hyperparameters["min_samples_split_range"]
         )
         min_samples_leaf = trial.suggest_int(
-            "min_samples_leaf",
-            self.config.hyperparameters["min_samples_leaf_range"][0],
-            self.config.hyperparameters["min_samples_leaf_range"][1],
+            "min_samples_leaf", *self.config.hyperparameters["min_samples_leaf_range"]
         )
         class_weight = trial.suggest_categorical(
             "class_weight", self.config.hyperparameters["class_weight"]
@@ -162,25 +153,18 @@ class RandomForestModel:
         """
         Logs the model and metrics using MLflow and saves the best model as a pickle file.
         """
-        # Start an MLflow run and log the model and metrics
-        with mlflow.start_run():
-            mlflow.set_experiment(
-                f"Extreme Stock Event Prediction {self.config.model['experiment_id']}"
-            )
-            mlflow.set_tag("model_name", self.config.model["name"])
-            mlflow.set_tag("experiment_id", self.config.model["experiment_id"])
+        mlflow.set_tag("model_name", self.config.model["name"])
+        mlflow.set_tag("experiment_id", self.config.model["experiment_id"])
 
-            logging.info(f"Best parameters: {model.get_params()}")
-            mlflow.log_params(model.get_params())
-            mlflow.log_metric(
-                "f1_score", self.tune_model(model, self.X_train_scaled, self.y_train)
-            )
-            mlflow.sklearn.log_model(
-                sk_model=model, artifact_path="random_forest_model"
-            )
+        logging.info(f"Best parameters: {model.get_params()}")
+        mlflow.log_params(model.get_params())
+        mlflow.log_metric(
+            "f1_score", self.tune_model(model, self.X_train_scaled, self.y_train)
+        )
+        mlflow.sklearn.log_model(sk_model=model, artifact_path="random_forest_model")
 
         # Save the best model as a pickle file
-        model_filename = f"{self.config.model['name']}_{self.config.model['experiment_id']}_best_model.pkl"
+        model_filename = f"{self.config.model['name']}_{self.config.model['experiment_id']}_model.pkl"
         pickle_path = os.path.join("data", model_filename)
         with open(pickle_path, "wb") as f:
             pickle.dump(model, f)
@@ -193,33 +177,36 @@ class RandomForestModel:
 
 
 def run():
-    # Load and partition data
-    stock_data = StockData(
-        ticker="AAPL", start_date="2015-01-01", end_date="2024-01-01"
-    )
-    train, val, _ = stock_data.partition_data()
-    train = pd.concat(
-        [train, val]
-    )  # use train and val for tuning because of low data volume
+    # Start an MLflow run and log the model and metrics
+    mlflow.set_experiment("RF_Optimization")
+    with mlflow.start_run():
+        # Load and partition data
+        stock_data = StockData(
+            ticker="AAPL", start_date="2015-01-01", end_date="2024-01-01"
+        )
+        train, val, test = stock_data.partition_data()
+        train = pd.concat([train, val])
 
-    # Initialize and train model with window sizes for lookback and horizon
-    lookback = 10
-    horizon = 1
+        # Initialize and train model with window sizes for lookback and horizon
+        lookback = 10
+        horizon = 1
 
-    # get windows
-    X_train, y_train = stock_data.get_windows(train, lookback, horizon, "Extreme_Event")
+        # get windows
+        X_train, y_train = stock_data.get_windows(
+            train, lookback, horizon, "Extreme_Event"
+        )
 
-    # reshape to rows,lookback*features
-    X_train = X_train.reshape(X_train.shape[0], -1)
+        # reshape to rows,lookback*features
+        X_train = X_train.reshape(X_train.shape[0], -1)
 
-    # turn to 1d array
-    y_train = y_train.ravel()
+        # turn to 1d array
+        y_train = y_train.ravel()
 
-    # instantiate rf
-    rf_model = RandomForestModel(X_train, y_train, "data/rf_config.yaml")
+        # instantiate rf
+        rf_model = RandomForestModel(X_train, y_train, "data/rf_config.yaml")
 
-    # tune hyperparams and get best model
-    rf_model.optimize_hyperparameters()
+        # tune hyperparams and get best model
+        rf_model.optimize_hyperparameters()
 
 
 if __name__ == "__main__":

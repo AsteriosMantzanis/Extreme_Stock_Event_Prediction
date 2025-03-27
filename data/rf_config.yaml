@@ -1,14 +1,14 @@
 model:
-  name: "random_forest_stock"
-  experiment_id: '2'
+  name: "random_forest"
+  experiment_id: '4'
 
 hyperparameters:
-  trials: 10
+  trials: 5
   cv: 10
   random_state: 42
   num_estimators_range: [200, 400]
   max_depth_range: [2, 10]
   min_samples_split_range: [10, 20]
   min_samples_leaf_range: [5, 20]
-  class_weight: ["balanced", "balanced_subsample"]  # for handling imbalanced classes
-  scaler: "standard"  # scalers to normalize/standardize features
+  class_weight: ["balanced", "balanced_subsample"]
+  scaler: "standard"

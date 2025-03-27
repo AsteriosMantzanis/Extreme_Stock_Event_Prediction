@@ -17,4 +17,5 @@
 /data/**/*.pkl
 /data/**/*.pth
 
+# Ignore folder from mlflow
 *mlruns

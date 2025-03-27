@@ -15,7 +15,7 @@ from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.data_processing import StockData
+from data_processing import StockData
 
 
 class Config(BaseModel):
@@ -35,14 +35,14 @@ class TemporalCNN(nn.Module):
     ):
         super().__init__()
         self.conv1 = nn.Conv1d(input_channels, out_channels, kernel_size)
-        self.conv2 = nn.Conv1d(out_channels, out_channels * 2, kernel_size)
+        self.conv2 = nn.Conv1d(out_channels, out_channels * 3, kernel_size)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
         self.flatten = nn.Flatten()
         new_length = lookback - 2 * (
             kernel_size - 1
         )  # Corrected length after convolution
-        self.fc = nn.Linear(new_length * out_channels * 2, num_classes)
+        self.fc = nn.Linear(new_length * out_channels * 3, num_classes)
 
     def forward(self, x):
         x = self.relu(self.conv1(x))
@@ -96,7 +96,7 @@ class TCNNTrainer:
         self.train_dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.config.hyperparameters["batch_size"],
-            shuffle=False,
+            shuffle=True,
         )
         self.val_dataloader = DataLoader(
             self.val_dataset,
@@ -107,8 +107,8 @@ class TCNNTrainer:
     def set_seed(self, seed: int):
         np.random.seed(seed)
         torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     def _scale_data(self, X_train: np.ndarray, X_val: np.ndarray, scaler_name: str):
         """
@@ -139,10 +139,15 @@ class TCNNTrainer:
         return X_train_scaled, X_val_scaled, scaler
 
     def train_and_evaluate(self, model, optimizer, criterion, scheduler):
-        best_roc, patience, counter = 0, 10, 0  # Early stopping params
+        best_roc = 0
+        patience = 30
+        counter = 0
+        best_model_state = None  # Ensure it's defined before training
 
         for epoch in range(self.config.hyperparameters["epochs"]):
             model.train()
+            total_train_loss = 0.0
+
             for X_batch, y_batch in self.train_dataloader:
                 optimizer.zero_grad()
                 outputs = model(X_batch)
@@ -150,35 +155,54 @@ class TCNNTrainer:
                 loss.backward()
                 optimizer.step()
 
+                total_train_loss += loss.item()
+
+            avg_train_loss = total_train_loss / len(self.train_dataloader)
+
             # Validation
             model.eval()
+            total_val_loss = 0.0
             all_preds, all_labels = [], []
+
             with torch.no_grad():
                 for X_batch, y_batch in self.val_dataloader:
                     outputs = model(X_batch)
-                    _, preds = torch.max(outputs, 1)
-                    all_preds.extend(preds.cpu().numpy())
+                    loss = criterion(outputs, y_batch)
+                    total_val_loss += loss.item()
+
+                    preds = torch.softmax(outputs, dim=1)
+                    all_preds.extend(preds.cpu().numpy()[:, 1])
                     all_labels.extend(y_batch.cpu().numpy())
 
+            avg_val_loss = total_val_loss / len(self.val_dataloader)
             roc = roc_auc_score(all_labels, all_preds)
-            mlflow.log_metric("validation_roc_auc_score", roc, step=epoch)
-            logging.info(f"Epoch {epoch+1}, Validation roc_auc_score: {roc:.4f}")
 
-            scheduler.step()
+            logging.info(
+                f"Epoch [{epoch+1}/{self.config.hyperparameters['epochs']}] "
+                f"- Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val ROC-AUC: {roc:.4f}"
+            )
 
-            # Early stopping
+            # Early stopping logic
             if roc > best_roc:
                 best_roc = roc
                 counter = 0
+                best_model_state = model.state_dict()  # Save best model state
             else:
                 counter += 1
                 if counter >= patience:
-                    logging.info("Early stopping triggered.")
+                    logging.info(
+                        f"Early stopping triggered. Best ROC-AUC: {best_roc:.4f}"
+                    )
                     break
 
-        best_model_state = model.state_dict()
+        # Load the best model state (handle case where early stopping never triggers)
+        if best_model_state is not None:
+            model.load_state_dict(best_model_state)
+        else:
+            logging.warning(
+                "No improvement during training. Returning last model state."
+            )
 
-        model.load_state_dict(best_model_state)
         return best_roc, model
 
     def objective(self, trial):
@@ -207,7 +231,7 @@ class TCNNTrainer:
         ).to(self.device)
         optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=0.5 * self.config.hyperparameters["epochs"]
+            optimizer, T_max=0.2 * self.config.hyperparameters["epochs"]
         )
         criterion = nn.CrossEntropyLoss(weight=self.class_weights)
 
@@ -232,31 +256,44 @@ class TCNNTrainer:
             kernel_size=best_params["kernel_size"],
             dropout=best_params["dropout"],
         ).to(self.device)
+
         optimizer = optim.Adam(best_model.parameters(), lr=best_params["learning_rate"])
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=0.5 * self.config.hyperparameters["epochs"]
+            optimizer, T_max=0.2 * self.config.hyperparameters["epochs"]
         )
         criterion = nn.CrossEntropyLoss(weight=self.class_weights)
+
+        logging.info("Training of best model started.")
 
         _, best_model = self.train_and_evaluate(
             best_model, optimizer, criterion, scheduler
         )
 
-        model_path = os.path.join("data", "best_tcnn.pth")
-        torch.save(best_model.state_dict(), model_path)
-        mlflow.log_artifact(model_path)
+        logging.info("Training of best model ended.")
 
-        scaler_path = os.path.join("data", "tcn_scaler.pkl")
-        with open(scaler_path, "wb") as f:
-            pickle.dump(self.scaler, f)
-        mlflow.log_artifact(scaler_path)
-
-        params_path = os.path.join("data", "best_params.pkl")
-        with open(params_path, "wb") as f:
-            pickle.dump(best_params, f)
-        mlflow.log_artifact(params_path)
+        self.log_and_save(best_model, self.scaler, best_params)
 
         return best_model
+
+    def log_and_save(self, model, scaler, params):
+        os.makedirs("data", exist_ok=True)
+
+        params_filename = f"{self.config.model['name']}_{self.config.model['experiment_id']}_params.pkl"
+        params_path = os.path.join("data", params_filename)
+        with open(params_path, "wb") as f:
+            pickle.dump(params, f)
+        mlflow.log_artifact(params_path)
+
+        model_filename = f"{self.config.model['name']}_{self.config.model['experiment_id']}_model.pth"
+        model_path = os.path.join("data", model_filename)
+        torch.save(model.state_dict(), model_path)
+        mlflow.log_artifact(model_path)
+
+        scaler_filename = f"{self.config.model['name']}_{self.config.model['experiment_id']}_scaler.pkl"
+        scaler_path = os.path.join("data", scaler_filename)
+        with open(scaler_path, "wb") as f:
+            pickle.dump(scaler, f)
+        mlflow.log_artifact(scaler_path)
 
 
 def run():
