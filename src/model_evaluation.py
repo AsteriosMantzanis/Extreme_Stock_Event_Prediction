@@ -2,19 +2,30 @@ import argparse
 import os
 import pickle
 
+import mlflow
 import numpy as np
 import torch
 from loguru import logger as logging
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from torch.utils.data import DataLoader, TensorDataset
 
 from data_processing import StockData
+from improvements import add_classic_features, apply_sin_cos_transform
 from temporal_cnn import TemporalCNN
 
 
 class ModelEvaluator:
-    def __init__(self, trial: int):
+    def __init__(self, trial: int, improved: False):
         self.trial = trial
+        self.improved = improved
         self.model_dispatch = {"rf": self.rf_evaluation, "tcn": self.tcn_evaluate}
 
         # Load stock data once in the constructor
@@ -26,12 +37,26 @@ class ModelEvaluator:
         # Compute and store test set windows
         self.lookback = 10
         self.horizon = 1
+        if self.improved:
+            self.test = add_classic_features(self.test)
+            self.test = apply_sin_cos_transform(self.test)
+
         self.X_test, self.y_test = self.stock_data.get_windows(
             self.test, self.lookback, self.horizon, "Extreme_Event"
         )
 
         # Store shape variables
         self.num_test_samples, self.lookback, self.num_features = self.X_test.shape
+
+    def log_metrics(self, model_name, metrics):
+        with mlflow.start_run(run_name=f"{model_name}_trial_{self.trial}"):
+            for key, value in metrics.items():
+                if isinstance(value, (int, float, np.float32, np.float64)):
+                    mlflow.log_metric(key, value)
+                else:
+                    mlflow.log_param(
+                        key, str(value)
+                    )  # Log non-scalars as string parameters
 
     def load_artifact(self, path: str):
         """Load an artifact from storage (pickle format)."""
@@ -112,6 +137,9 @@ class ModelEvaluator:
             model = self.load_torch_model(
                 model_files[0], params
             )  # Now load the model with params
+        else:
+            # load rf model
+            model = self.load_artifact(model_files[0])
 
         return model, scaler, params
 
@@ -128,7 +156,19 @@ class ModelEvaluator:
         y_test = self.y_test.ravel()
 
         y_pred = model.predict(X_test)
-        logging.info(f"F1 Score: {f1_score(y_test, y_pred)}")
+
+        metrics = {
+            "ROC AUC Score": roc_auc_score(y_test, y_pred),
+            "Accuracy": accuracy_score(y_test, y_pred),
+            "Precision": precision_score(y_test, y_pred),
+            "Recall": recall_score(y_test, y_pred),
+            "F1 Score": f1_score(y_test, y_pred),
+            "Confusion Matrix": confusion_matrix(y_test, y_pred),
+            "Classification Report": classification_report(y_test, y_pred),
+        }
+        self.log_metrics("tcn", metrics)
+
+        [logging.info(f"{i}: {j}") for i, j in zip(metrics.keys(), metrics.values())]
 
     def tcn_evaluate(self):
         logging.info(f"Evaluating TCN Model - Trial {self.trial}")
@@ -164,7 +204,20 @@ class ModelEvaluator:
                 all_preds.extend(preds.cpu().numpy()[:, 1])
                 all_labels.extend(y_batch.cpu().numpy())
 
-        logging.info(f"ROC AUC Score: {roc_auc_score(all_labels, all_preds)}")
+        y_pred_binary = [1 if p > 0.5 else 0 for p in all_preds]
+
+        metrics = {
+            "ROC AUC Score": roc_auc_score(all_labels, all_preds),
+            "Accuracy": accuracy_score(all_labels, y_pred_binary),
+            "Precision": precision_score(all_labels, y_pred_binary),
+            "Recall": recall_score(all_labels, y_pred_binary),
+            "F1 Score": f1_score(all_labels, y_pred_binary),
+            "Confusion Matrix": confusion_matrix(all_labels, y_pred_binary),
+            "Classification Report": classification_report(all_labels, y_pred_binary),
+        }
+        self.log_metrics("tcn", metrics)
+
+        [logging.info(f"{i}: {j}") for i, j in zip(metrics.keys(), metrics.values())]
 
     def evaluate(self, model_name):
         """Dispatches the evaluation based on model type."""
@@ -180,8 +233,11 @@ if __name__ == "__main__":
         "model", choices=["rf", "tcn"], help="Model type to evaluate (rf or tcn)"
     )
     parser.add_argument("trial", type=int, help="Trial number")
+    parser.add_argument(
+        "--improved", action="store_true", help="Use improved feature engineering"
+    )
 
     args = parser.parse_args()
 
-    evaluator = ModelEvaluator(trial=args.trial)
+    evaluator = ModelEvaluator(trial=args.trial, improved=args.improved)
     evaluator.evaluate(args.model)

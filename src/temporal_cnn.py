@@ -1,5 +1,6 @@
 import os
 import pickle
+import random
 from typing import Dict
 
 import mlflow
@@ -96,7 +97,7 @@ class TCNNTrainer:
         self.train_dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.config.hyperparameters["batch_size"],
-            shuffle=True,
+            shuffle=False,
         )
         self.val_dataloader = DataLoader(
             self.val_dataset,
@@ -106,9 +107,13 @@ class TCNNTrainer:
 
     def set_seed(self, seed: int):
         np.random.seed(seed)
+        random.seed(seed)
         torch.manual_seed(seed)
         torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.benchmark = False
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
     def _scale_data(self, X_train: np.ndarray, X_val: np.ndarray, scaler_name: str):
         """
@@ -138,7 +143,7 @@ class TCNNTrainer:
 
         return X_train_scaled, X_val_scaled, scaler
 
-    def train_and_evaluate(self, model, optimizer, criterion, scheduler):
+    def train_and_evaluate(self, model, optimizer, criterion):
         best_roc = 0
         patience = 30
         counter = 0
@@ -230,12 +235,9 @@ class TCNNTrainer:
             params["dropout"],
         ).to(self.device)
         optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=0.2 * self.config.hyperparameters["epochs"]
-        )
         criterion = nn.CrossEntropyLoss(weight=self.class_weights)
 
-        return self.train_and_evaluate(model, optimizer, criterion, scheduler)[0]
+        return self.train_and_evaluate(model, optimizer, criterion)[0]
 
     def optimize_hyperparameters(self):
         study = optuna.create_study(
@@ -258,16 +260,11 @@ class TCNNTrainer:
         ).to(self.device)
 
         optimizer = optim.Adam(best_model.parameters(), lr=best_params["learning_rate"])
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=0.2 * self.config.hyperparameters["epochs"]
-        )
         criterion = nn.CrossEntropyLoss(weight=self.class_weights)
 
         logging.info("Training of best model started.")
 
-        _, best_model = self.train_and_evaluate(
-            best_model, optimizer, criterion, scheduler
-        )
+        _, best_model = self.train_and_evaluate(best_model, optimizer, criterion)
 
         logging.info("Training of best model ended.")
 
