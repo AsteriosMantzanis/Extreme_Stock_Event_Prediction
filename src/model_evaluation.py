@@ -166,7 +166,7 @@ class ModelEvaluator:
             "Confusion Matrix": confusion_matrix(y_test, y_pred),
             "Classification Report": classification_report(y_test, y_pred),
         }
-        self.log_metrics("tcn", metrics)
+        self.log_metrics("rf", metrics)
 
         [logging.info(f"{i}: {j}") for i, j in zip(metrics.keys(), metrics.values())]
 

@@ -34,6 +34,17 @@ class TemporalCNN(nn.Module):
         dropout,
         num_classes=2,
     ):
+        seed = 0
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.manual_seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
+        os.environ["PYTHONHASHSEED"] = str(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
         super().__init__()
         self.conv1 = nn.Conv1d(input_channels, out_channels, kernel_size)
         self.conv2 = nn.Conv1d(out_channels, out_channels * 3, kernel_size)
@@ -94,15 +105,22 @@ class TCNNTrainer:
         self.train_dataset = TensorDataset(self.X_train_scaled, self.y_train)
         self.val_dataset = TensorDataset(self.X_val_scaled, self.y_val)
 
+        g = torch.Generator()
+        g.manual_seed(self.config.hyperparameters["random_seed"])
+
         self.train_dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.config.hyperparameters["batch_size"],
             shuffle=False,
+            worker_init_fn=self.seed_worker,
+            generator=g,
         )
         self.val_dataloader = DataLoader(
             self.val_dataset,
             batch_size=self.config.hyperparameters["batch_size"],
             shuffle=False,
+            worker_init_fn=self.seed_worker,
+            generator=g,
         )
 
     def set_seed(self, seed: int):
@@ -112,8 +130,17 @@ class TCNNTrainer:
         torch.backends.cudnn.deterministic = True
         torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.benchmark = False
+        os.environ["PYTHONHASHSEED"] = str(seed)
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+
+    def seed_worker(self, worker_id):
+        # Use both the main seed and worker_id to create unique seeds per worker
+        base_seed = self.config.hyperparameters["random_seed"]
+        worker_seed = base_seed + worker_id
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
 
     def _scale_data(self, X_train: np.ndarray, X_val: np.ndarray, scaler_name: str):
         """
@@ -246,7 +273,9 @@ class TCNNTrainer:
                 seed=self.config.hyperparameters["random_seed"]
             ),
         )
-        study.optimize(self.objective, n_trials=self.config.hyperparameters["trials"])
+        study.optimize(
+            self.objective, n_trials=self.config.hyperparameters["trials"], n_jobs=1
+        )
 
         best_params = study.best_params
         mlflow.log_params(best_params)

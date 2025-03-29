@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from imblearn.under_sampling import RandomUnderSampler
 
 from data_processing import StockData
 from temporal_cnn import TCNNTrainer
@@ -19,14 +20,22 @@ def apply_sin_cos_transform(df):
     df = df.copy()
 
     # Exclude target & date columns
-    exclude_cols = ["day_of_week", "month", "Extreme_Event"]
+    exclude_cols = ["Extreme_Event"]
     feature_cols = [col for col in df.columns if col not in exclude_cols]
 
     for col in feature_cols:
-        df[f"{col}_sin"] = np.sin(2 * np.pi * df[col] / 5)
-        df[f"{col}_cos"] = np.cos(2 * np.pi * df[col] / 5)
+        df[f"{col}_sin"] = np.sin(2 * np.pi * df[col] / 10)
+        df[f"{col}_cos"] = np.cos(2 * np.pi * df[col] / 10)
 
     return df
+
+
+def undersample(df: pd.DataFrame, target: str):
+    smote = RandomUnderSampler(sampling_strategy="majority", random_state=42)
+    X_train = df.drop(target, axis=1)
+    y_train = df[target]
+    X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+    return pd.concat([X_train_resampled, y_train_resampled], axis=1)
 
 
 def prepare_data(stock_data, lookback, horizon, target_col):
@@ -36,6 +45,7 @@ def prepare_data(stock_data, lookback, horizon, target_col):
     # Apply feature engineering
     train = apply_sin_cos_transform(add_classic_features(train))
     val = apply_sin_cos_transform(add_classic_features(val))
+    train = undersample(train, "Extreme_Event")
 
     # Get windows for TCN
     X_train, y_train = stock_data.get_windows(train, lookback, horizon, target_col)
