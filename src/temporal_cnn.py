@@ -34,16 +34,11 @@ class TemporalCNN(nn.Module):
         dropout,
         num_classes=2,
     ):
-        seed = 0
-        np.random.seed(seed)
-        random.seed(seed)
-        torch.manual_seed(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.use_deterministic_algorithms(True)
-        torch.backends.cudnn.benchmark = False
-        os.environ["PYTHONHASHSEED"] = str(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        with open("data/tcn_config.yaml") as file:
+            config_data = yaml.safe_load(file)
+        self.config = Config(**config_data)
+
+        self.set_seed(self.config.hyperparameters["random_seed"])
 
         super().__init__()
         self.conv1 = nn.Conv1d(input_channels, out_channels, kernel_size)
@@ -63,6 +58,17 @@ class TemporalCNN(nn.Module):
         x = self.dropout(x)
         x = self.flatten(x)
         return self.fc(x)
+
+    def set_seed(self, seed: int):
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.manual_seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
+        os.environ["PYTHONHASHSEED"] = str(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
 
 class TCNNTrainer:
@@ -171,10 +177,11 @@ class TCNNTrainer:
         return X_train_scaled, X_val_scaled, scaler
 
     def train_and_evaluate(self, model, optimizer, criterion):
-        best_roc = 0
+        best_val_loss = float("inf")
+        best_train_loss = float("inf")
         patience = 30
         counter = 0
-        best_model_state = None  # Ensure it's defined before training
+        best_model_state = None
 
         for epoch in range(self.config.hyperparameters["epochs"]):
             model.train()
@@ -214,20 +221,21 @@ class TCNNTrainer:
                 f"- Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val ROC-AUC: {roc:.4f}"
             )
 
-            # Early stopping logic
-            if roc > best_roc:
-                best_roc = roc
+            # Early stopping logic - monitor both training and validation loss
+            if avg_val_loss < best_val_loss and avg_train_loss < best_train_loss:
+                best_val_loss = avg_val_loss
+                best_train_loss = avg_train_loss
                 counter = 0
-                best_model_state = model.state_dict()  # Save best model state
+                best_model_state = model.state_dict()
             else:
                 counter += 1
                 if counter >= patience:
                     logging.info(
-                        f"Early stopping triggered. Best ROC-AUC: {best_roc:.4f}"
+                        f"Early stopping triggered. Best Val Loss: {best_val_loss:.4f}, Best Train Loss: {best_train_loss:.4f}"
                     )
                     break
 
-        # Load the best model state (handle case where early stopping never triggers)
+        # Load the best model state
         if best_model_state is not None:
             model.load_state_dict(best_model_state)
         else:
@@ -235,7 +243,7 @@ class TCNNTrainer:
                 "No improvement during training. Returning last model state."
             )
 
-        return best_roc, model
+        return best_val_loss, model
 
     def objective(self, trial):
         params = {

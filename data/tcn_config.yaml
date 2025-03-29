@@ -1,6 +1,6 @@
 model:
   name: "TemporalCNN"
-  experiment_id: "63"
+  experiment_id: "73"
 
 hyperparameters:
   optimizer: "adam"

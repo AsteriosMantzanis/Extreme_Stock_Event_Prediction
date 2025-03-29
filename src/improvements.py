@@ -30,14 +30,6 @@ def apply_sin_cos_transform(df):
     return df
 
 
-def undersample(df: pd.DataFrame, target: str):
-    smote = RandomUnderSampler(sampling_strategy="majority", random_state=42)
-    X_train = df.drop(target, axis=1)
-    y_train = df[target]
-    X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-    return pd.concat([X_train_resampled, y_train_resampled], axis=1)
-
-
 def prepare_data(stock_data, lookback, horizon, target_col):
     """Loads and transforms data for TCN training."""
     train, val, _ = stock_data.partition_data()
@@ -45,7 +37,6 @@ def prepare_data(stock_data, lookback, horizon, target_col):
     # Apply feature engineering
     train = apply_sin_cos_transform(add_classic_features(train))
     val = apply_sin_cos_transform(add_classic_features(val))
-    train = undersample(train, "Extreme_Event")
 
     # Get windows for TCN
     X_train, y_train = stock_data.get_windows(train, lookback, horizon, target_col)
