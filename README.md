@@ -31,10 +31,6 @@ poetry install
 ```
 This will create a virtual environment and install all required packages.
 
-#### Activate the Poetry virtual environment:
-```bash
-poetry shell
-```
 ## Running the Scripts
 
 Each script in the src directory is modular and can be executed independently.
